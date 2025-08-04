@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Recall.ai Per Participant Live Video Sample</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      .event-group-label {
+        font-weight: 600;
+        margin-top: 15px;
+        margin-bottom: 5px;
+        display: block;
+        color: #333;
+        font-size: 1.1em;
+      }
+      .event-item {
+        margin-left: 20px;
+        margin-bottom: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Recall.ai Per Participant Live Video Sample</h1>
+      <div class="main-layout-rows">
+        <div class="participants-row">
+          <div class="participants-header">
+            <h2>Participants:</h2>
+          </div>
+          <div id="participants">Waiting for participants...</div>
+        </div>
+        <div class="logs-row">
+          <div class="log-header">
+            <h2>Real-time Server Logs:</h2>
+          </div>
+          <div class="log-buttons">
+            <button id="toggleAutoScrollBtn" class="action-btn">
+              Pause Auto Scroll
+            </button>
+            <button id="disableLogsBtn" class="action-btn">
+              Disable Logs
+            </button>
+          </div>
+          <div id="realTimeLog">Waiting for server events...</div>
+        </div>
+      </div>
+    </div>
+    <script type="module">
+      const realTimeLog = document.getElementById("realTimeLog");
+      const participantContainer = document.getElementById("participants");
+      const toggleAutoScrollBtn = document.getElementById(
+        "toggleAutoScrollBtn"
+      );
+      const disableLogsBtn = document.getElementById(
+        "disableLogsBtn"
+      );
+      let autoScrollEnabled = true;
+      let logsEnabled = true;
+
+      // Set the websocket URL to the url of the window, a reasonable default
+      const starting_url = window.location.href;
+      if (starting_url.startsWith("http://localhost") || starting_url.startsWith("http://127.0.0.1")) {
+        console.error("Can't set websocket URL to localhost");
+        alert("Please use a public URL for the websocket connection");
+      }
+      toggleAutoScrollBtn.addEventListener("click", () => {
+        autoScrollEnabled = !autoScrollEnabled;
+        if (autoScrollEnabled) {
+          toggleAutoScrollBtn.textContent = "Pause Auto Scroll";
+          realTimeLog.scrollTop = realTimeLog.scrollHeight;
+        } else {
+          toggleAutoScrollBtn.textContent = "Resume Auto Scroll";
+        }
+      });
+
+      disableLogsBtn.addEventListener("click", () => {
+        logsEnabled = !logsEnabled;
+        if (logsEnabled) {
+          disableLogsBtn.textContent = "Disable Logs";
+          realTimeLog.style.display = "block";
+          realTimeLog.textContent = "Waiting for server events...";
+          realTimeLog.scrollTop = realTimeLog.scrollHeight;
+        } else {
+          disableLogsBtn.textContent = "Enable Logs";
+          realTimeLog.style.display = "none";
+        }
+      });
+
+
+      const uiSocketProtocol =
+        window.location.protocol === "https:" ? "wss:" : "ws:";
+      const uiSocket = new WebSocket(
+        `${uiSocketProtocol}//${window.location.host}/ui-updates`
+      );
+
+      uiSocket.onopen = () => {
+        const initialEntry = document.createElement("div");
+        initialEntry.textContent =
+          "Connected to server for real-time updates.\n";
+        realTimeLog.appendChild(initialEntry);
+        console.log("UI WebSocket connected");
+        if (autoScrollEnabled) {
+          realTimeLog.scrollTop = realTimeLog.scrollHeight;
+        }
+      };
+
+      function addLog(msg, time) {
+        if (!logsEnabled) {
+          return; // Skip logging if logs are disabled
+        }
+          const timestamp = `[${new Date(
+            time || Date.now()
+          ).toLocaleTimeString()}]`;
+          const logEntry = document.createElement("div");
+          const timeSpan = document.createElement("span");
+          timeSpan.className = "log-timestamp";
+          timeSpan.textContent = timestamp;
+
+          const textNode = document.createTextNode(msg);
+          logEntry.appendChild(timeSpan);
+          logEntry.appendChild(textNode);
+
+          realTimeLog.appendChild(logEntry);
+          if (autoScrollEnabled) {
+            realTimeLog.scrollTop = realTimeLog.scrollHeight;
+          }
+      }
+
+      const participant2state = new Map();
+      async function handleVideoDecoderError(error) {
+        console.error("VideoDecoder error:", error);
+        addLog(
+          `VideoDecoder error: ${error.message}`,
+          Date.now()
+        );
+      }
+      async function handleDecodedVideoFrame(ctx, videoFrame) {
+        // Draw the frame to a canvas
+        if (ctx.width !== videoFrame.displayWidth || ctx.height !== videoFrame.displayHeight) {
+          console.log(
+            `Canvas size changed, video:${videoFrame.displayWidth}x${videoFrame.displayHeight}, was:${ctx.canvas.width}x${ctx.canvas.height}`
+          );
+          ctx.canvas.width = videoFrame.displayWidth;
+          ctx.canvas.height = videoFrame.displayHeight;
+        }
+        ctx.drawImage(videoFrame, 0, 0, videoFrame.displayWidth, videoFrame.displayHeight);
+
+        // Close the frame to release resources
+        videoFrame.close();
+      }
+    function isKeyframe(data) {
+      // Scan for NAL start codes and find the first slice
+      for (let i = 0; i < data.length - 4; i++) {
+        if (
+          (data[i] === 0 && data[i+1] === 0 && ((data[i+2] === 1) || (data[i+2] === 0 && data[i+3] === 1)))
+        ) {
+          const nalOffset = (data[i+2] === 1) ? i+3 : i+4;
+          const nalType = data[nalOffset] & 0x1F;
+          if (nalType === 5) return true; // IDR slice
+          if (nalType === 1) return false; // non-IDR slice
+        }
+      }
+      return false; // default if no slice found
+    }
+      function onVideoBuffer(type, participant, ts, h264bufferB64) {
+        const participantId = participant.id;
+        var state = participant2state.get(participantId);
+        if (state === undefined) {
+          console.error(
+            `No decoder found for participant ${participantId}. Cannot process video buffer.`
+          );
+          addParticipant(participant);
+          state = participant2state.get(participantId);
+          // return;
+        }
+        var decoder = undefined;
+        if (type == "webcam"){
+          decoder = state.webcam_decoder;
+        }else if (type == "screenshare") {
+          if (state.screenshare_decoder === undefined) {
+            const canvas = document.createElement("canvas");
+            state.element.appendChild(canvas);
+            const ctx = canvas.getContext('2d');
+            state.screenshare_decoder = new VideoDecoder({
+              output: handleDecodedVideoFrame.bind(null, ctx),
+              error: handleVideoDecoderError,
+            });
+            state.screenshare_decoder.configure({
+              codec: "avc1.42E01E", // H.264 codec
+            });
+            state.screenshare_canvas = canvas;
+          }
+          decoder = state.screenshare_decoder;
+        }
+        const au = Uint8Array.from(atob(h264bufferB64), c => c.charCodeAt(0));
+        if (decoder.decodeQueueSize < 20){
+          decoder.decode(new EncodedVideoChunk({
+            type: isKeyframe(au) ? 'key' : 'delta', 
+            timestamp: 0,// Play as fast as possible, you may want to use timestamps
+            data: au,
+          }));
+        }
+        else{
+          console.warn(
+            `Decoder queue is full for participant ${participantId}. Skipping frame. This will cause video artifacts and dropped frames.`
+          );
+        }
+      }
+      function removeParticipant(participant) {
+        var state = participant2state.get(participant.id);
+        if (state === undefined) {
+          return;
+        }
+        state.decoder.close();
+        participantContainer.removeChild(state.element);
+        participant2state.delete(participant.id);
+        addLog(
+          `Participant left: ${participant.name || "???"} (#${participant.id})`,
+          Date.now()
+        );
+        if (participant2state.size === 0) {
+          participantContainer.textContent = "No participants connected.";
+        }
+      }
+      function addParticipant(participant) {
+        const participantId = participant.id;
+        const participantName = participant.name || "???";
+        const participantDiv = document.createElement("div");
+        participantDiv.className = "participant";
+        participantDiv.id = `participant-${participantId}`;
+
+        const canvas = document.createElement("canvas");
+        participantDiv.appendChild(canvas);
+        const ctx = canvas.getContext('2d');
+        const participantNameDiv = document.createElement("div");
+        participantNameDiv.textContent = `${participantName}|#${participantId}`;
+        participantNameDiv.className = `participant-name`;
+        participantDiv.appendChild(participantNameDiv);
+
+        var state = {
+          element: participantDiv,
+          webcam_canvas: canvas,
+          webcam_decoder: new VideoDecoder({
+            output: handleDecodedVideoFrame.bind(null, ctx),
+            error: handleVideoDecoderError,
+          }),
+        };
+        state.webcam_decoder.configure({
+          codec: "avc1.42E01E", // H.264 codec
+        });
+        if (participant2state.size === 0) {
+          participantContainer.textContent = "";
+        }
+        participantContainer.appendChild(participantDiv);
+        participant2state.set(participantId, state);
+        addLog(
+          `Participant joined: ${participantName} (#${participantId})`,
+          Date.now()
+        );
+      }
+      uiSocket.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.log !== undefined) {
+            addLog(message.log, message.timestamp);
+            return;
+          } else if(message.event !== undefined) {
+            const eventType = message.event;
+            const eventData = message.data;
+
+            if (eventType === "participant_events.join") {
+              addLog(
+                `Participant joined: ${eventData.data.participant.id}`,
+                eventData.timestamp
+              );
+              addParticipant(eventData.data.participant);
+            } else if (eventType === "participant_events.leave") {
+              addLog(
+                `Participant leave: ${eventData.data.participant.id}`,
+                eventData.timestamp
+              );
+              removeParticipant(eventData.data.participant);
+            } else if (eventType === "video_separate_h264.data") {
+              onVideoBuffer(eventData.data.type, eventData.data.participant, eventData.data.timestamp, eventData.data.buffer);
+              eventData.data.buffer = "...";// Hide the actual buffer data in the log
+            } else {
+              const eventEntry = document.createElement("div");
+              eventEntry.textContent = `[${eventType}] ${JSON.stringify(eventData)}`;
+              realTimeLog.appendChild(eventEntry);
+            }
+          } else {
+            console.warn("Unknown message format:", message);
+            
+          }
+          addLog(JSON.stringify(message), Date.now());
+        } catch (e) {
+          console.error(
+            "Error processing UI WebSocket message:",
+            e,
+            event.data
+          );
+          const rawEntry = document.createElement("div");
+          rawEntry.textContent = `[RAW] ${event.data}`;
+          realTimeLog.appendChild(rawEntry);
+          if (autoScrollEnabled) {
+            realTimeLog.scrollTop = realTimeLog.scrollHeight;
+          }
+        }
+      };
+
+      uiSocket.onerror = (error) => {
+        console.error("UI WebSocket Error:", error);
+        const errorEntry = document.createElement("div");
+        errorEntry.textContent =
+          "Error connecting to real-time log server. Check console.\n";
+        realTimeLog.appendChild(errorEntry);
+        if (autoScrollEnabled) {
+          realTimeLog.scrollTop = realTimeLog.scrollHeight;
+        }
+      };
+
+      uiSocket.onclose = () => {
+        console.log("UI WebSocket disconnected");
+        const closeEntry = document.createElement("div");
+        closeEntry.textContent = "Disconnected from real-time log server.\n";
+        realTimeLog.appendChild(closeEntry);
+        if (autoScrollEnabled) {
+          realTimeLog.scrollTop = realTimeLog.scrollHeight;
+        }
+      };
+    </script>
+  </body>
+</html>
