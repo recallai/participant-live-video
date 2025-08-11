@@ -137,7 +137,7 @@
       }
       async function handleDecodedVideoFrame(ctx, videoFrame) {
         // Draw the frame to a canvas
-        if (ctx.width !== videoFrame.displayWidth || ctx.height !== videoFrame.displayHeight) {
+        if (ctx.canvas.width !== videoFrame.displayWidth || ctx.canvas.height !== videoFrame.displayHeight) {
           console.log(
             `Canvas size changed, video:${videoFrame.displayWidth}x${videoFrame.displayHeight}, was:${ctx.canvas.width}x${ctx.canvas.height}`
           );
@@ -212,7 +212,9 @@
         if (state === undefined) {
           return;
         }
-        state.decoder.close();
+        if (state.decoder !== undefined) {
+          state.decoder.close();
+        }
         participantContainer.removeChild(state.element);
         participant2state.delete(participant.id);
         addLog(
